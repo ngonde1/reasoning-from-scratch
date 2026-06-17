@@ -1,0 +1,17 @@
+{
+  "custom_fonts": [],
+  "variables": {
+    "light": {
+      "--border": "210 20% 85%",
+      "--input": "210 25% 90%",
+      "--sidebar-border": "210 15% 80%",
+      "--ring": "217 91% 60%"
+    },
+    "dark": {
+      "--border": "210 15% 25%",
+      "--input": "210 20% 30%",
+      "--sidebar-border": "210 10% 20%",
+      "--ring": "217 91% 60%"
+    }
+  }
+}

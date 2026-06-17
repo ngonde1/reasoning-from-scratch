@@ -1,0 +1,131 @@
+| Variable | Purpose | HSL | HEX |
+| --- | --- | --- | --- |
+| **[--background](ca://s?q=Explain_background_variable)** | Page background | hsl(0, 0%, 100%) | #FFFFFF |
+| **[--foreground](ca://s?q=Explain_foreground_variable)** | Main text | hsl(0, 0%, 5%) | #0D0D0D |
+| **[--card](ca://s?q=Explain_card_variable)** | Card background | hsl(0, 0%, 100%) | #FFFFFF |
+| **[--card-foreground](ca://s?q=Explain_card_foreground_variable)** | Card text | hsl(0, 0%, 5%) | #0D0D0D |
+| **[--primary](ca://s?q=Explain_primary_variable)** | Accent buttons | hsl(340, 92%, 52%) | #E0316D |
+| **[--primary-foreground](ca://s?q=Explain_primary_foreground_variable)** | Text on primary | hsl(0, 0%, 100%) | #FFFFFF |
+| **[--secondary](ca://s?q=Explain_secondary_variable)** | Secondary accent | hsl(210, 40%, 96.1%) | #F1F7FB |
+| **[--secondary-foreground](ca://s?q=Explain_secondary_foreground_variable)** | Text on secondary | hsl(222.2, 47.4%, 11.2%) | #0F1C2B |
+| **[--muted](ca://s?q=Explain_muted_variable)** | Disabled bg | hsl(0, 0%, 90%) | #E6E6E6 |
+| **[--muted-foreground](ca://s?q=Explain_muted_foreground_variable)** | Disabled text | hsl(0, 0%, 36%) | #5C5C5C |
+| **[--accent](ca://s?q=Explain_accent_variable)** | Accent bg | hsl(0, 0%, 95%) | #F2F2F2 |
+| **[--accent-foreground](ca://s?q=Explain_accent_foreground_variable)** | Accent text | hsl(222.2, 47.4%, 11.2%) | #0F1C2B |
+| **[--destructive](ca://s?q=Explain_destructive_variable)** | Delete/danger | hsl(0, 84.2%, 60.2%) | #E64545 |
+| **[--destructive-foreground](ca://s?q=Explain_destructive_foreground_variable)** | Text on destructive | hsl(210, 40%, 98%) | #F9FBFD |
+| **[--border](ca://s?q=Explain_border_variable)** | Border color | hsl(0, 0%, 90%) | #E6E6E6 |
+| **[--input](ca://s?q=Explain_input_variable)** | Input bg | hsl(0, 0%, 90%) | #E6E6E6 |
+| **[--ring](ca://s?q=Explain_ring_variable)** | Focus outline | hsl(340, 92%, 52%) | #E0316D |
+| **[--radius](ca://s?q=Explain_radius_variable)** | Corner roundness | 0.75rem | — |
+| **[--sidebar-background](ca://s?q=Explain_sidebar_background_variable)** | Sidebar bg | hsl(0, 0%, 98%) | #FAFAFA |
+| **[--sidebar-foreground](ca://s?q=Explain_sidebar_foreground_variable)** | Sidebar text | hsl(240, 5.3%, 26.1%) | #3F3F4A |
+| **[--sidebar-primary](ca://s?q=Explain_sidebar_primary_variable)** | Sidebar primary | hsl(240, 5.9%, 10%) | #1A1A1F |
+| **[--sidebar-primary-foreground](ca://s?q=Explain_sidebar_primary_foreground_variable)** | Text on sidebar primary | hsl(0, 0%, 98%) | #FAFAFA |
+| **[--sidebar-accent](ca://s?q=Explain_sidebar_accent_variable)** | Sidebar accent bg | hsl(240, 4.8%, 95.9%) | #F4F4F7 |
+| **[--sidebar-accent-foreground](ca://s?q=Explain_sidebar_accent_foreground_variable)** | Sidebar accent text | hsl(240, 5.9%, 10%) | #1A1A1F |
+| **[--sidebar-border](ca://s?q=Explain_sidebar_border_variable)** | Sidebar border | hsl(220, 13%, 91%) | #E9EDF2 |
+| **[--sidebar-ring](ca://s?q=Explain_sidebar_ring_variable)** | Sidebar focus ring | hsl(217.2, 91.2%, 59.8%) | #3B82F6 |
+
+| Variable | Purpose | HSL | HEX |
+| --- | --- | --- | --- |
+| **[--background](ca://s?q=Explain_dark_background_variable)** | Page background | hsl(0, 0%, 13%) | #212121 |
+| **[--foreground](ca://s?q=Explain_dark_foreground_variable)** | Main text | hsl(0, 0%, 93%) | #EDEDED |
+| **[--card](ca://s?q=Explain_dark_card_variable)** | Card bg | hsl(0, 0%, 18%) | #2E2E2E |
+| **[--card-foreground](ca://s?q=Explain_dark_card_foreground_variable)** | Card text | hsl(210, 40%, 98%) | #F9FBFD |
+| **[--popover](ca://s?q=Explain_dark_popover_variable)** | Popover bg | hsl(0, 0%, 18%) | #2E2E2E |
+| **[--popover-foreground](ca://s?q=Explain_dark_popover_foreground_variable)** | Popover text | hsl(210, 40%, 98%) | #F9FBFD |
+| **[--primary](ca://s?q=Explain_dark_primary_variable)** | Accent | hsl(340, 92%, 52%) | #E0316D |
+| **[--primary-foreground](ca://s?q=Explain_dark_primary_foreground_variable)** | Text on primary | hsl(0, 0%, 100%) | #FFFFFF |
+| **[--secondary](ca://s?q=Explain_dark_secondary_variable)** | Secondary accent | hsl(0, 0%, 19%) | #303030 |
+| **[--secondary-foreground](ca://s?q=Explain_dark_secondary_foreground_variable)** | Text on secondary | hsl(210, 40%, 98%) | #F9FBFD |
+| **[--muted](ca://s?q=Explain_dark_muted_variable)** | Disabled bg | hsl(0, 1%, 26%) | #424242 |
+| **[--muted-foreground](ca://s?q=Explain_dark_muted_foreground_variable)** | Disabled text | hsl(0, 0%, 71%) | #B5B5B5 |
+| **[--accent](ca://s?q=Explain_dark_accent_variable)** | Accent bg | hsl(0, 0%, 26%) | #424242 |
+| **[--accent-foreground](ca://s?q=Explain_dark_accent_foreground_variable)** | Accent text | hsl(210, 40%, 98%) | #F9FBFD |
+| **[--destructive](ca://s?q=Explain_dark_destructive_variable)** | Delete/danger | hsl(0, 62.8%, 30.6%) | #992D2D |
+| **[--destructive-foreground](ca://s?q=Explain_dark_destructive_foreground_variable)** | Text on destructive | hsl(210, 40%, 98%) | #F9FBFD |
+| **[--border](ca://s?q=Explain_dark_border_variable)** | Border | hsl(0, 1%, 26%) | #424242 |
+| **[--input](ca://s?q=Explain_dark_input_variable)** | Input bg | hsl(0, 1%, 26%) | #424242 |
+| **[--ring](ca://s?q=Explain_dark_ring_variable)** | Focus outline | hsl(340, 92%, 52%) | #E0316D |
+| **[--sidebar-background](ca://s?q=Explain_dark_sidebar_background_variable)** | Sidebar bg | hsl(0, 0%, 9%) | #171717 |
+| **[--sidebar-foreground](ca://s?q=Explain_dark_sidebar_foreground_variable)** | Sidebar text | hsl(240, 4.8%, 95.9%) | #F4F4F7 |
+| **[--sidebar-primary](ca://s?q=Explain_dark_sidebar_primary_variable)** | Sidebar primary | hsl(224.3, 76.3%, 48%) | #3B5FFF |
+| **[--sidebar-primary-foreground](ca://s?q=Explain_dark_sidebar_primary_foreground_variable)** | Text on sidebar primary | hsl(0, 0%, 100%) | #FFFFFF |
+| **[--sidebar-accent](ca://s?q=Explain_dark_sidebar_accent_variable)** | Sidebar accent bg | hsl(0, 0%, 13%) | #212121 |
+| **[--sidebar-accent-foreground](ca://s?q=Explain_dark_sidebar_accent_foreground_variable)** | Sidebar accent text | hsl(240, 4.8%, 95.9%) | #F4F4F7 |
+| **[--sidebar-border](ca://s?q=Explain_dark_sidebar_border_variable)** | Sidebar border | hsl(240, 3.7%, 15.9%) | #292929 |
+| **[--sidebar-ring](ca://s?q=Explain_dark_sidebar_ring_variable)** | Sidebar focus ring | hsl(217.2, 91.2%, 59.8%) | #3B82F6 |
+
+
+
+{
+    "custom_fonts": [], // 📚 This is like your backpack for extra fonts. Right now it’s empty, so you only carry the default fonts.
+    "variables": {
+        "light": { // ☀️ This section is for daytime mode (light mode). Imagine your app wearing a white T‑shirt.
+            "--font-sans": "'Inter', sans-serif", // 🔤 This is the main text style. It’s smooth and easy to read, like handwriting in a notebook.
+            "--font-mono": "source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace", // 💻 This is the “robot font” for code. Every letter is the same width, so it lines up neatly.
+            "--background": "0 0% 100%", // 🏳️ The background color of the whole page. White like a blank sheet of paper.
+            "--foreground": "0 0% 5%", // ⚫ The main text color. Very dark, almost black, so you can read clearly.
+            "--card": "0 0% 100%", // 🗂️ Cards (little boxes) are white, like sticky notes.
+            "--card-foreground": "0 0% 5%", // ✍️ Text inside cards is black, so it pops out.
+            "--popover": "0 0% 100%", // 📌 Popovers (like tooltips or menus) are white.
+            "--popover-foreground": "0 0% 5%", // 📝 Text inside popovers is black.
+            "--primary": "340 92% 52%", // ❤️ The main accent color. Bright pink/red, like a heart emoji.
+            "--primary-foreground": "0 0% 100%", // ⚪ Text on the pink/red buttons is white, so it’s easy to see.
+            "--secondary": "210 40% 96.1%", // 💙 Secondary accent. Light blue, like the sky.
+            "--secondary-foreground": "222.2 47.4% 11.2%", // 🖊️ Text on the blue is dark, so it stands out.
+            "--muted": "0 0% 90%", // 🌫️ Muted background. Light gray, like faded pencil marks.
+            "--muted-foreground": "0 0% 36%", // 🕶️ Muted text. Dark gray, softer than black.
+            "--accent": "0 0% 95%", // 🎨 Accent background. Very light gray, like a shadow.
+            "--accent-foreground": "222.2 47.4% 11.2%", // 🖋️ Accent text. Dark, so you can read it.
+            "--destructive": "0 84.2% 60.2%", // ❌ Destructive (danger) background. Bright red, like a stop sign.
+            "--destructive-foreground": "210 40% 98%", // ⚪ Text on the red button is white, so it’s clear.
+            "--border": "0 0% 90%", // 📏 Borders are light gray, like pencil lines around boxes.
+            "--input": "0 0% 90%", // 🖊️ Input fields (where you type) are light gray.
+            "--ring": "340 92% 52%", // 🔔 Focus ring. Pink/red outline when you click something.
+            "--radius": "0.75rem", // 🔲 Rounded corners. About 12 pixels, so boxes look smooth not sharp.
+            "--sidebar-background": "0 0% 98%", // 📑 Sidebar background. Almost white, like notebook paper.
+            "--sidebar-foreground": "240 5.3% 26.1%", // 🖊️ Sidebar text. Dark gray, easy to read.
+            "--sidebar-primary": "240 5.9% 10%", // 🔵 Sidebar primary. Dark blue, like navy ink.
+            "--sidebar-primary-foreground": "0 0% 98%", // ⚪ Text on dark blue is white.
+            "--sidebar-accent": "240 4.8% 95.9%", // 🎨 Sidebar accent background. Light gray.
+            "--sidebar-accent-foreground": "240 5.9% 10%", // 🖊️ Sidebar accent text. Dark gray.
+            "--sidebar-border": "220 13% 91%", // 📏 Sidebar border. Light gray lines.
+            "--sidebar-ring": "217.2 91.2% 59.8%" // 🔔 Sidebar focus ring. Bright blue outline when clicked.
+        },
+        "dark": { // 🌙 This section is for nighttime mode (dark mode). Imagine your app wearing a black hoodie.
+            "--font-sans": "'Inter', sans-serif", // 🔤 Same smooth text font.
+            "--font-mono": "source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace", // 💻 Same robot font for code.
+            "--background": "0 0% 13%", // ⚫ Dark background. Almost black, like the night sky.
+            "--foreground": "0 0% 93%", // ⚪ Light text. Almost white, like chalk on a blackboard.
+            "--card": "0 0% 18%", // 🗂️ Card background. Dark gray, like a shadow.
+            "--card-foreground": "210 40% 98%", // ✍️ Card text. White, so it shines on dark.
+            "--popover": "0 0% 18%", // 📌 Popover background. Dark gray.
+            "--popover-foreground": "210 40% 98%", // 📝 Popover text. White.
+            "--primary": "340 92% 52%", // ❤️ Same pink/red accent, like a neon sign.
+            "--primary-foreground": "0 0% 100%", // ⚪ Text on pink/red is white.
+            "--secondary": "0 0% 19%", // ⚫ Secondary accent. Dark gray.
+            "--secondary-foreground": "210 40% 98%", // ⚪ Text on dark gray is white.
+            "--muted": "0 1% 26%", // 🌫️ Muted background. Medium gray.
+            "--muted-foreground": "0 0% 71%", // 🕶️ Muted text. Light gray.
+            "--accent": "0 0% 26%", // 🎨 Accent background. Dark gray.
+            "--accent-foreground": "210 40% 98%", // ⚪ Accent text. White.
+            "--destructive": "0 62.8% 30.6%", // ❌ Destructive background. Dark red, like danger lights.
+            "--destructive-foreground": "210 40% 98%", // ⚪ Text on red is white.
+            "--border": "0 1% 26%", // 📏 Borders are dark gray.
+            "--input": "0 1% 26%", // 🖊️ Input fields are dark gray.
+            "--ring": "340 92% 52%", // 🔔 Focus ring. Same pink/red outline.
+            "--sidebar-background": "0 0% 9%", // ⚫ Sidebar background. Black.
+            "--sidebar-foreground": "240 4.8% 95.9%", // ⚪ Sidebar text. White.
+            "--sidebar-primary": "224.3 76.3% 48%", // 🔵 Sidebar primary. Bright blue.
+            "--sidebar-primary-foreground": "0 0% 100%", // ⚪ Text on blue is white.
+            "--sidebar-accent": "0 0% 13%", // ⚫ Sidebar accent background. Black.
+            "--sidebar-accent-foreground": "240 4.8% 95.9%", // ⚪ Sidebar accent text. White.
+            "--sidebar-border": "240 3.7% 15.9%", // 📏 Sidebar border. Dark gray.
+            "--sidebar-ring": "217.2 91.2% 59.8%" // 🔔 Sidebar focus ring. Bright blue outline.
+        }
+    }
+}
+
+

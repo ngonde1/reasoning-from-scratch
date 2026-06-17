@@ -1,0 +1,27 @@
+/* Force the login button to use theme ring instantly */
+button[type="submit"] {
+  background-color: hsl(var(--ring)) !important;
+  border-color: hsl(var(--ring)) !important;
+  color: hsl(0 0% 100%) !important;
+}
+
+/* Hide Chainlit watermark and disclaimer */
+.watermark, footer {
+  display: none !important;
+}
+
+/* Universal border + glow transitions */
+button, input, textarea {
+  border: 1px solid hsl(var(--border));
+  transition: border-color 0.25s ease, box-shadow 0.25s ease;
+}
+
+button:hover, input:hover, textarea:hover {
+  border-color: hsl(var(--ring));
+}
+
+button:focus, input:focus, textarea:focus {
+  border-color: hsl(var(--ring));
+  box-shadow: 0 0 6px hsl(var(--ring) / 0.6); /* premium glow */
+  outline: none;
+}
