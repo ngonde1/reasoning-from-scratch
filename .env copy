@@ -1,0 +1,13 @@
+CHAINLIT_AUTH_SECRET="aQLHzYd0x$qGvyrXgqOYk/htMu4ix>bOYNn*f:myNbC%0Up7m/Knn^XYd-hfgLyr"
+DATABASE_URL=postgresql+asyncpg://admin:admin@localhost:5432/my_chainlit_db
+CHAINLIT_BLOB_STORAGE=local
+HF_HUB_OFFLINE=1
+HF_HUB_DISABLE_SYMLINKS_WARNING=1
+STRIPE_ENABLED=true
+LLAMA_PARSE_API_KEY=llx-27DlMzS0m1Scvd0xwhQVAElIttTjNumso3uHEkRMW9ZajsN5
+
+
+
+
+
+

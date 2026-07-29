@@ -2,11 +2,43 @@
 import os
 import asyncio
 import time
+import datetime
 import csv
 import re
+import json
 from pathlib import Path
 from typing import TypedDict, List
+from pdf2image import convert_from_path
 import langcodes
+from fastapi.staticfiles import StaticFiles
+from local_storage_client import LocalStorageClient
+from sqlalchemy import insert
+from chainlit.context import context
+from sqlalchemy import insert
+from chainlit.context import context
+from collections import defaultdict
+from sqlalchemy import text as sql_text
+from llama_parse import LlamaParse
+from docling.document_converter import DocumentConverter
+from reasoning_from_scratch.rag_utils import add_to_index, query_index
+#from chainlit.element import DataTable
+from reasoning_from_scratch.rag_utils import add_to_index
+from reasoning_from_scratch.utils import sanitize_row, chunk_rows, chunk_text, ingest_file, get_data_layer
+
+
+# ✅ Initialize advanced parsers
+parser = LlamaParse(api_key=os.getenv("LLAMA_PARSE_API_KEY"))
+doc_converter = DocumentConverter()
+
+
+# ✅ Import your universal ingestion helpers
+#from file_ingestion import (
+ #   load_excel, load_csv, load_docx, load_pdf,
+  #  load_txt, load_json,
+   # auto_detect_columns, build_copy_table, compute_all_numeric_stats,
+    #professional_llm_response
+#)
+
 
 # Toggle streaming mode
 USE_STREAMING = True   # for live typing
@@ -24,9 +56,12 @@ import socketio  # ✅ Added for payload limit
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from sentence_transformers.sentence_transformer import modules
+from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
 load_dotenv()
+
+# Now os.getenv will work
+parser = LlamaParse(api_key=os.getenv("LLAMA_PARSE_API_KEY"))
 
 
 # --- Chainlit elements ---
@@ -40,6 +75,19 @@ from PIL import Image as PILImage
 import pytesseract
 from langchain_community.document_loaders import PDFPlumberLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+def sanitize_row(row: dict) -> dict:
+    """Convert non-serializable values (like datetime) into strings."""
+    clean_row = {}
+    for k, v in row.items():
+        if isinstance(v, (datetime.date, datetime.datetime)):
+            clean_row[k] = v.isoformat()  # e.g., '2021-10-16T00:00:00'
+        elif v is None:
+            clean_row[k] = ""
+        else:
+            clean_row[k] = v
+    return clean_row
+
 
 # --- Local project imports ---
 from reasoning_from_scratch.ch02 import get_device, generate_text_basic_stream_cache
@@ -55,7 +103,7 @@ sio = socketio.AsyncServer(
 
 # ------------------- Configuration -------------------
 WHICH_MODEL = "reasoning"
-MAX_NEW_TOKENS = 512
+MAX_NEW_TOKENS = 38912
 LOCAL_DIR = "qwen3"
 CHECKPOINT_PATH = os.getenv("CHECKPOINT_PATH")
 COMPILE = False
@@ -82,12 +130,25 @@ def load_app_model_and_tokenizer():
         model = torch.compile(model)
     return model, tokenizer
 
-MODEL, TOKENIZER = load_app_model_and_tokenizer()
+MODEL, TOKENIZER, DEVICE = load_app_model_and_tokenizer()
 
 EOS_TOKEN_IDS = (
     TOKENIZER.encode("<|im_end|>")[0],
     TOKENIZER.encode("<|endoftext|>")[0]
 )
+
+# ============================================================
+# Conversation History Tracker
+# ============================================================
+def build_prompt_from_history(history, add_assistant_header=True):
+    parts = []
+    for m in history:
+        role = m["role"]
+        content = m["content"]
+        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>\n")
+    if add_assistant_header:
+        parts.append("<|im_start|>assistant\n")
+    return "".join(parts)
 
 # ------------------- Agent State -------------------
 class AgentState(TypedDict):
@@ -119,23 +180,34 @@ def run_qwen_sync(prompt: str) -> str:
 # ------------------- Authentication & Data Layer -------------------
 @cl.password_auth_callback
 def auth_callback(username: str, password: str):
-    if (username, password) == ("admin", "admin"):
+    if (username, password) == ("admin", "kevin"):
         return cl.User(identifier="admin", metadata={"role": "admin", "provider": "credentials"})
     return None
+
+
+# Use Chainlit’s FastAPI app instead of cl.app
+app = cl.server.app
+app.mount("/files", StaticFiles(directory="uploads"), name="files")
 
 @cl.data_layer
 def get_data_layer():
     conninfo = os.getenv("DATABASE_URL")
     if not conninfo:
         raise ValueError("DATABASE_URL not found in environment variables.")
-    return SQLAlchemyDataLayer(conninfo=conninfo)
+    return SQLAlchemyDataLayer(
+        conninfo=conninfo,
+        storage_provider=LocalStorageClient(base_dir="uploads")
+    )
 
 # ------------------- Stripe Toggle -------------------
 def register_tools(app):
     if os.getenv("STRIPE_ENABLED", "false").lower() == "true":
-        from stripe_mcp import StripeMCP
-        app.register_tool(StripeMCP())
-        print("✅ Stripe MCP enabled.")
+        try:
+            from stripe_mcp import StripeMCP
+            app.register_tool(StripeMCP())
+            print("✅ Stripe MCP enabled.")
+        except ImportError:
+            print("⚠️ Stripe MCP module not installed — skipping Stripe integration.")
     else:
         print("🚫 Stripe MCP disabled — prompt-only mode.")
 
@@ -171,6 +243,7 @@ async def call_tool(tool_use):
 @cl.on_chat_resume
 async def on_chat_resume(thread: ThreadDict):
     try:
+        # ✅ Restore conversation messages
         messages = []
         for m in thread.get("messages", []):
             role = m.get("role")
@@ -181,34 +254,192 @@ async def on_chat_resume(thread: ThreadDict):
                 messages.append(HumanMessage(content=content))
             elif role == "assistant":
                 messages.append(AIMessage(content=content))
+
         cl.user_session.set("state", {"messages": messages})
+        cl.user_session.set("history", [
+            {"role": m.__class__.__name__.replace("Message", "").lower(), "content": m.content}
+            for m in messages
+        ])
+
+        # ✅ Reload file context from Postgres (no re‑persist)
+        data_layer = get_data_layer()
+        async with data_layer.engine.begin() as conn:
+            result = await conn.execute(
+                sql_text("SELECT file_name, headers, rows, text_content FROM file_contents WHERE thread_id = :tid"),
+                {"tid": thread["id"]}
+            )
+            for row in result:
+                if row.file_name:
+                    headers, rows, text_content = [], [], ""
+
+                    if row.headers:
+                        headers = json.loads(row.headers) if isinstance(row.headers, str) else row.headers
+                    if row.rows:
+                        rows = json.loads(row.rows) if isinstance(row.rows, str) else row.rows
+                    if row.text_content:
+                        text_content = row.text_content
+
+                    # ✅ Store back into user_session for later use
+                    if headers:
+                        cl.user_session.set(f"{row.file_name}_headers", headers)
+                    if rows:
+                        cl.user_session.set(f"{row.file_name}_table", rows)
+                    if text_content:
+                        cl.user_session.set(f"{row.file_name}_text", text_content)
+
+                    print(f"✅ Reloaded {row.file_name} from Postgres")
+
     except Exception as e:
-        print(f"\nError resuming chat: {e}")
+        print(f"⚠️ Error resuming chat: {e}")
         cl.user_session.set("state", {"messages": []})
+        cl.user_session.set("history", [])
+
+
+#@cl.on_file_upload
+#async def on_file_upload(file):
+ #   """
+  #  Automatically ingest files uploaded mid-conversation.
+   # """
+ #   try:
+  #      await persist_file_content(file.path)
+   #     print(f"✅ Auto-ingested {file.path} during conversation")
+    #    await cl.Message(
+     #       content=f"✅ Your file **{Path(file.path).name}** has been ingested and indexed."
+      #  ).send()
+ #   except Exception as e:
+  #      print(f"⚠️ Failed to ingest {file.path}: {e}")
+   #     await cl.Message(
+    #        content=f"⚠️ Failed to ingest {Path(file.path).name}: {e}"
+     #   ).send()
 
 @cl.on_chat_start
 async def on_chat_start():
+    cl.user_session.set("history", [])
+    cl.user_session.get("history").append(
+        {"role": "system", "content": "You are a helpful assistant."}
+    )
+
+    thread_id = cl.context.session.thread_id
+    data_layer = get_data_layer()
+    async with data_layer.engine.begin() as conn:
+        await conn.execute(
+            sql_text("INSERT INTO threads (id) VALUES (:tid) ON CONFLICT DO NOTHING"),
+            {"tid": thread_id}
+        )
+
     MODEL.reset_kv_cache()
+
+    # ✅ Auto-ingest any files uploaded before chat start
+    uploaded_files = cl.context.session.files
+    if uploaded_files:
+        for f in uploaded_files:
+            try:
+                await persist_file_content(f.path)
+                print(f"✅ Auto-ingested {f.path} at chat start")
+            except Exception as e:
+                print(f"⚠️ Failed to ingest {f.path}: {e}")
+
+
 
 def chunk_rows(rows, chunk_size=500):
     """Split large tabular datasets into manageable chunks."""
     for i in range(0, len(rows), chunk_size):
         yield rows[i:i+chunk_size]
 
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 100):
+    """
+    Split raw text into overlapping chunks for FAISS indexing.
+    - chunk_size: max characters per chunk
+    - overlap: repeated characters between chunks for context continuity
+    """
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunk = text[start:end]
+        chunks.append(chunk)
+        start += chunk_size - overlap
+    return chunks
+
+async def persist_file_content(file_path: str):
+    """
+    Unified file ingestion + persistence with file-type specific chunking:
+    - Excel/CSV/JSON → chunk rows (default 500)
+    - Text/PDF/DOCX → chunk text (default 1000 chars, 100 overlap)
+    - Images → OCR text chunked like TXT
+    """
+    data_layer = get_data_layer()
+    thread_id = cl.context.session.thread_id
+    file_name = Path(file_path).name
+    ext = Path(file_path).suffix.lower()
+
+    # ✅ Use dispatcher to ingest file
+    headers, rows_or_text = ingest_file(file_path)
+
+    # Structured files (Excel, CSV, JSON)
+    if ext in [".xlsx", ".xls", ".csv", ".json"] and headers and rows_or_text:
+        rows = rows_or_text
+        for chunk in chunk_rows(rows, chunk_size=500):   # 500 rows per chunk
+            payload = {
+                "thread_id": thread_id,
+                "file_name": file_name,
+                "headers": json.dumps(headers),
+                "rows": json.dumps([sanitize_row(r) for r in chunk]),
+                "text_content": None,
+            }
+            async with data_layer.engine.begin() as conn:
+                await conn.execute(
+                    sql_text("""
+                        INSERT INTO file_contents (thread_id, file_name, headers, rows, text_content)
+                        VALUES (:thread_id, :file_name, :headers, :rows, :text_content)
+                    """),
+                    payload
+                )
+            add_to_index(chunk, headers)
+
+    # Unstructured text files (TXT, DOCX, PDF)
+    else:
+        text_content = rows_or_text
+        payload = {
+            "thread_id": thread_id,
+            "file_name": file_name,
+            "headers": None,
+            "rows": None,
+            "text_content": text_content if isinstance(text_content, str) else json.dumps(text_content),
+        }
+        async with data_layer.engine.begin() as conn:
+            await conn.execute(
+                sql_text("""
+                    INSERT INTO file_contents (thread_id, file_name, headers, rows, text_content)
+                    VALUES (:thread_id, :file_name, :headers, :rows, :text_content)
+                """),
+                payload
+            )
+
+        # ✅ Chunk text for FAISS indexing
+        if isinstance(text_content, str):
+            for chunk in chunk_text(text_content, chunk_size=1000, overlap=100):  # 1000 chars per chunk
+                add_to_index([{"RawText": chunk}], ["RawText"])
+        elif isinstance(text_content, list):
+            for chunk in text_content:
+                for sub_chunk in chunk_text(chunk, chunk_size=1000, overlap=100):
+                    add_to_index([{"RawText": sub_chunk}], ["RawText"])
+
+    print(f"✅ Saved {file_name} to Postgres and FAISS for thread {thread_id}")
+
+
 def load_excel(file_path):
     wb = openpyxl.load_workbook(file_path)
     sheet = wb.active
     headers = []
     for i, cell in enumerate(next(sheet.iter_rows(values_only=True))):
-        if cell and str(cell).strip():
-            headers.append(str(cell).strip())
-        else:
-            headers.append(f"Column{i}")  # fallback only if truly empty
+        headers.append(str(cell).strip() if cell else f"Column{i}")
     rows = []
     for row in sheet.iter_rows(min_row=2, values_only=True):
         row_dict = {headers[i]: row[i] for i in range(len(headers))}
-        rows.append(row_dict)
+        rows.append(sanitize_row(row_dict))   # ✅ sanitize each row
     return headers, rows
+
 
 def load_csv(file_path):
     rows, headers = [], []
@@ -216,22 +447,168 @@ def load_csv(file_path):
         reader = csv.DictReader(f)
         headers = reader.fieldnames
         for row in reader:
-            rows.append(row)
+            rows.append(sanitize_row(row))   # ✅ sanitize each row
     return headers, rows
 
+
 def load_docx(file_path):
-    doc = docx.Document(file_path)
-    texts = [para.text for para in doc.paragraphs if para.text.strip()]
-    return texts
+    """
+    Try Docling first (Markdown).
+    Fallback to python-docx if Docling fails or offline.
+    """
+    try:
+        result = doc_converter.convert(file_path)
+        return result.to_markdown()
+    except Exception as e:
+        print(f"⚠️ Docling failed, falling back: {e}")
+        import docx
+        doc = docx.Document(file_path)
+        return [para.text for para in doc.paragraphs if para.text.strip()]
+
 
 def load_pdf(file_path):
-    reader = PyPDF2.PdfReader(file_path)
-    texts = []
-    for page in reader.pages:
-        text = page.extract_text()
-        if text:
-            texts.append(text)
-    return texts
+    """
+    Try LlamaParse first (clean Markdown).
+    Fallback to PyPDF2 + OCR if LlamaParse fails or offline.
+    """
+    try:
+        return parser.parse(file_path)
+    except Exception as e:
+        print(f"⚠️ LlamaParse failed, falling back: {e}")
+        texts = []
+        reader = PyPDF2.PdfReader(file_path)
+        POPPLER_PATH = r"C:\poppler-26.02.0\Library\bin"
+        for page_num, page in enumerate(reader.pages):
+            try:
+                page_text = page.extract_text()
+                if page_text and page_text.strip():
+                    texts.append(page_text)
+                else:
+                    images = convert_from_path(
+                        file_path,
+                        first_page=page_num + 1,
+                        last_page=page_num + 1,
+                        poppler_path=POPPLER_PATH
+                    )
+                    for img in images:
+                        ocr_text = pytesseract.image_to_string(img)
+                        if ocr_text.strip():
+                            texts.append(ocr_text)
+            except Exception as e2:
+                texts.append(f"⚠️ OCR error on page {page_num+1}: {e2}")
+        return texts if texts else ["⚠️ No text extracted from PDF."]
+
+
+    
+def load_txt(file_path):
+    """Load plain text files."""
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        file_text = f.read()
+    return file_text.splitlines()
+
+
+def load_json(file_path):
+    with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+        data = json.load(f)
+
+    if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+        headers = list(data[0].keys()) if data else []
+        rows = [sanitize_row(r) for r in data]   # ✅ sanitize JSON rows
+        return headers, rows
+    else:
+        # fallback: treat as raw text
+        file_text = json.dumps(data, indent=2, default=str)  # ✅ ensure safe serialization
+        return [], [{"RawJSON": file_text}]
+
+# Add Dispatcher Functionn
+
+def ingest_file(file_path: str):
+    """
+    Universal file dispatcher:
+    Auto-detects file type and routes to the correct loader.
+    Returns (headers, rows) for structured files or (None, text_chunks) for unstructured.
+    """
+    ext = Path(file_path).suffix.lower()
+
+    if ext in [".xlsx", ".xls"]:
+        return load_excel(file_path)
+    elif ext == ".csv":
+        return load_csv(file_path)
+    elif ext == ".docx":
+        # Docx returns paragraphs, so wrap in rows
+        return [], load_docx(file_path)
+    elif ext == ".pdf":
+        return [], load_pdf(file_path)
+    elif ext == ".txt":
+        return [], load_txt(file_path)
+    elif ext == ".json":
+        return load_json(file_path)
+    else:
+        # Fallback: treat as raw text
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            return [], [{"RawText": f.read()}]
+
+async def list_ingested_files():
+    """
+    List all ingested files for the current thread/session.
+    Shows file name, headers, and number of rows/text chunks.
+    """
+    thread_id = cl.context.session.thread_id
+    data_layer = get_data_layer()
+
+    async with data_layer.engine.begin() as conn:
+        result = await conn.execute(
+            sql_text("SELECT file_name, headers, rows, text_content FROM file_contents WHERE thread_id = :tid"),
+            {"tid": thread_id}
+        )
+
+        files_info = []
+        for row in result:
+            headers = json.loads(row.headers) if row.headers else []
+            rows = json.loads(row.rows) if row.rows else []
+            text_content = row.text_content
+
+            files_info.append({
+                "file_name": row.file_name,
+                "headers": headers,
+                "row_count": len(rows) if rows else 0,
+                "text_length": len(text_content) if text_content else 0
+            })
+
+        if not files_info:
+            await cl.Message(content="⚠️ No files ingested yet for this session.").send()
+        else:
+            msg = "📂 **Ingested Files in Current Session:**\n\n"
+            for f in files_info:
+                msg += f"- **{f['file_name']}**\n"
+                if f["headers"]:
+                    msg += f"  • Headers: {', '.join(f['headers'][:5])}...\n"
+                msg += f"  • Rows: {f['row_count']}\n"
+                msg += f"  • Text length: {f['text_length']} characters\n\n"
+            await cl.Message(content=msg).send()
+
+
+async def delete_ingested_file(file_name: str):
+    """
+    Delete an ingested file from the current session.
+    Removes it from Postgres and clears it from FAISS index.
+    """
+    thread_id = cl.context.session.thread_id
+    data_layer = get_data_layer()
+
+    async with data_layer.engine.begin() as conn:
+        result = await conn.execute(
+            sql_text("DELETE FROM file_contents WHERE thread_id = :tid AND file_name = :fname"),
+            {"tid": thread_id, "fname": file_name}
+        )
+
+    # ⚠️ Note: FAISS index cleanup depends on your add_to_index implementation.
+    # If you want to fully remove vectors, you’ll need a delete_from_index helper.
+    # For now, this removes the file from Postgres so it won’t be reloaded.
+
+    await cl.Message(content=f"🗑️ File **{file_name}** has been deleted from this session.").send()
+
+
 
 def auto_detect_column(headers, user_message):
     msg_lower = user_message.lower()
@@ -334,23 +711,22 @@ def parse_numeric(value):
     if value is None:
         return None
 
-    text = str(value).strip()
+    raw_text = str(value).strip()
 
     # Remove common currency symbols and unit labels
-    text = re.sub(r"(USD|EUR|GBP|JPY|CFA|NGN|INR|CAD|AUD|CHF|₦|₿|¥|€|£|\$)", "", text, flags=re.IGNORECASE)
+    raw_text = re.sub(r"(USD|EUR|GBP|JPY|CFA|NGN|INR|CAD|AUD|CHF|₦|₿|¥|€|£|\$)", "", raw_text, flags=re.IGNORECASE)
 
     # Remove commas, percent signs, and extra words
-    text = re.sub(r"[,%]", "", text)
-    text = re.sub(r"[A-Za-z:]", "", text)  # strip stray letters like 'Age:' or 'Salary'
+    raw_text = re.sub(r"[,%]", "", raw_text)
+    raw_text = re.sub(r"[A-Za-z:]", "", raw_text)  # strip stray letters like 'Age:' or 'Salary'
 
     # Keep only digits, dot, minus
-    cleaned = re.sub(r"[^\d\.\-]", "", text)
+    cleaned = re.sub(r"[^\d\.\-]", "", raw_text)
 
     try:
         return float(cleaned)
     except ValueError:
         return None
-
 
 def filter_rows_by_numeric(rows, column_name, threshold, operator=">"):
     """
@@ -382,28 +758,46 @@ def filter_rows_by_numeric(rows, column_name, threshold, operator=">"):
     return results
 
 def get_filtered_table(rows, column_name, values, headers=None):
+    """
+    Filter rows by specific values in a column and return a Markdown table.
+    """
     filtered = filter_rows_by_values(rows, column_name, values)
     if not headers and filtered:
         headers = list(filtered[0].keys())
     if not filtered:
         return "No results found."
-    # Build Markdown table
-    table = "| " + " | ".join(headers) + " |\n"
-    table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
-    for r in filtered:
-        row_values = [str(r.get(h, "")) for h in headers]
-        table += "| " + " | ".join(row_values) + " |\n"
-    return table
+    # Return Markdown table
+    return build_markdown_table(filtered, headers)
 
 def build_table(rows, headers, limit=20):
+    """
+    Build a Markdown table from rows and headers.
+    """
     if not rows:
-        return "⚠️ No matching records found."
+        return "No matching records found."
+    # Return Markdown table
+    return build_markdown_table(rows[:limit], headers)
+
+def build_markdown_table(rows, headers, limit=None):
+    """
+    Render rows as a Markdown table with proper headers.
+    """
+    if not rows:
+        return "No matching records found."
+    if limit:
+        rows = rows[:limit]
+
+    # Build header row
     table = "| " + " | ".join(headers) + " |\n"
     table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
-    for r in rows[:limit]:
+
+    # Build data rows
+    for r in rows:
         row_values = [str(r.get(h, "")) for h in headers]
         table += "| " + " | ".join(row_values) + " |\n"
+
     return table
+
 
 def compute_all_numeric_stats(rows: list, headers: list) -> str:
     """
@@ -556,123 +950,196 @@ def apply_conditions(rows: list, conditions: list):
 
     return filtered
 
-
-async def professional_llm_response(user_query: str, file_table: list, headers: list, llm_runner) -> str:
+async def debug_file_ingestion(file_name: str, file_table: list, headers: list, file_text: str):
     """
-    Final wrapper:
-    - Auto-detects numeric AND string conditions
-    - Supports AND/OR logic
-    - Applies combined filters before summarizing
-    - Adds domain-adaptive enrichment (Finance, HR, Legal, Project, Customer, Compliance)
-    - Always enforces professional format (summary → table → insights → closing note)
+    Diagnostic helper: prints ingestion status for ANY file type.
+    Shows whether structured rows (file_table) or raw text (file_text) are available.
     """
 
-    # Step 1: Apply conditions
-    filtered_rows = file_table
-    conditions = detect_conditions(user_query, headers)
-    if conditions:
-        filtered_rows = apply_conditions(file_table, conditions)
+    print("\n📂 Debugging File Ingestion")
+    print(f"➡️ File: {file_name}")
 
-    # Step 2: Convert filtered rows into text for LLM
-    if filtered_rows:
-        table_text = "\n".join([
-            " | ".join(f"{k}: {v}" for k, v in row.items())
-            for row in filtered_rows[:50]  # limit to 50 rows for prompt efficiency
-        ])
+    if headers:
+        print(f"📝 Headers detected: {headers}")
     else:
-        table_text = "No matching records found."
+        print("⚠️ No headers detected.")
 
-    # Step 3: Compute numeric stats
-    numeric_stats = compute_all_numeric_stats(filtered_rows, headers) if filtered_rows else ""
+    if file_table:
+        print(f"✅ Structured rows loaded: {len(file_table)} rows")
+        for r in file_table[:2]:
+            print(f"   Row preview: {r}")
+    else:
+        print("⚠️ No structured rows found.")
 
-    # Step 4: Domain-adaptive enrichment
-    enrichment = ""
-    st_model = cl.user_session.get("st_model")
-    texts = cl.user_session.get("file_text", "").split("\n")
-    if st_model and texts:
-        domain = await detect_file_domain(texts, st_model)
+    if file_text and file_text.strip():
+        print(f"✅ Raw text extracted: {len(file_text)} characters")
+        print(f"   Text preview: {file_text[:200]}...")
+    else:
+        print("⚠️ No raw text extracted.")
 
-        if domain == "Finance":
-            total_revenue = sum(float(r.get("Revenue", 0) or 0) for r in filtered_rows)
-            total_expenses = sum(float(r.get("Expenses", 0) or 0) for r in filtered_rows)
-            margin = (total_revenue - total_expenses) / total_revenue * 100 if total_revenue else 0
-            enrichment = (
-                f"\n💰 **Finance Insight:**\n"
-                f"- Profit Margin: {margin:.2f}%\n"
-                f"- Total Revenue: {total_revenue:.2f}\n"
-                f"- Total Expenses: {total_expenses:.2f}"
-            )
+    print("📊 Ingestion check complete.\n")
 
-        elif domain == "HR":
-            total_employees = len(filtered_rows)
-            leavers = sum(1 for r in filtered_rows if str(r.get("Status", "")).lower() in ["left", "terminated", "resigned"])
-            turnover = (leavers / total_employees * 100) if total_employees else 0
-            enrichment = (
-                f"\n👥 **HR Insight:**\n"
-                f"- Total Employees: {total_employees}\n"
-                f"- Leavers: {leavers}\n"
-                f"- Turnover Rate: {turnover:.2f}%"
-            )
 
-        elif domain == "Legal":
-            clause_count = sum(1 for r in filtered_rows if r.get("Clause"))
-            enrichment = (
-                f"\n⚖️ **Legal Insight:**\n"
-                f"- Total Clauses Detected: {clause_count}\n"
-                f"- Compliance Risks may need review."
-            )
+def auto_detect_columns(headers, rows):
+    categorical_cols, numeric_cols, date_cols = [], [], []
+    for h in headers:
+        values = [str(r.get(h, "")) for r in rows if r.get(h)]
+        if not values:
+            continue
+        numeric_count, date_count = 0, 0
+        for v in values[:20]:
+            try:
+                float(v); numeric_count += 1
+            except:
+                try:
+                    datetime.datetime.fromisoformat(v); date_count += 1
+                except:
+                    pass
+        if numeric_count > len(values)*0.5:
+            numeric_cols.append(h)
+        elif date_count > len(values)*0.3:
+            date_cols.append(h)
+        else:
+            categorical_cols.append(h)
+    return categorical_cols, numeric_cols, date_cols
 
-        elif domain == "Project":
-            enrichment = (
-                f"\n📈 **Project Insight:**\n"
-                f"- Milestones tracked: {len(filtered_rows)}\n"
-                f"- Check deadlines for risk."
-            )
+def build_copy_table(rows, headers, limit=30):
+    if not rows:
+        return "No matching records found."
+    # Plain text tab-separated table
+    table = "\t".join(headers) + "\n"
+    for r in rows[:limit]:
+        row_values = [str(r.get(h, "")) for h in headers]
+        table += "\t".join(row_values) + "\n"
+    return table
 
-        elif domain == "Customer":
-            enrichment = (
-                f"\n🤝 **Customer Insight:**\n"
-                f"- Orders/Feedback records: {len(filtered_rows)}\n"
-                f"- Retention trends visible."
-            )
+def compute_all_numeric_stats(rows, headers):
+    result = "Numeric Stats:\n"
+    found = False
+    for col in headers:
+        values = []
+        for r in rows:
+            try:
+                values.append(float(r.get(col)))
+            except:
+                continue
+        if values:
+            found = True
+            result += f"{col}: Count={len(values)}, Sum={sum(values):.2f}, Avg={sum(values)/len(values):.2f}, Min={min(values):.2f}, Max={max(values):.2f}\n"
+    return result if found else "No numeric columns found."
 
-        elif domain == "Compliance":
-            enrichment = (
-                f"\n🛡️ **Compliance Insight:**\n"
-                f"- Policy adherence checks\n"
-                f"- Risk factors detected."
-            )
+def detect_trends(rows, numeric_cols, date_cols):
+    """
+    Sorts by first date column and compares numeric values over time.
+    Returns a plain text summary of trends.
+    """
+    if not numeric_cols or not date_cols:
+        return ""
 
-    # Step 5: Build prompt for LLM
-    prompt = f"""
-You are a professional data analyst.
-You are given a user query and extracted file content.
-Respond in a polished, professional format that ALWAYS follows this structure:
+    date_col = date_cols[0]
+    trends = "Trends:\n"
+    try:
+        sorted_rows = sorted(
+            rows,
+            key=lambda r: datetime.datetime.fromisoformat(str(r.get(date_col)))
+            if r.get(date_col) else datetime.datetime.min
+        )
+        for num_col in numeric_cols:
+            values = [(r.get(date_col), parse_numeric(r.get(num_col))) for r in sorted_rows if parse_numeric(r.get(num_col)) is not None]
+            if len(values) >= 2:
+                start_date, start_val = values[0]
+                end_date, end_val = values[-1]
+                direction = "increased" if end_val > start_val else "decreased" if end_val < start_val else "remained stable"
+                trends += f"{num_col}: {direction} from {start_val} → {end_val} between {start_date} and {end_date}\n"
+    except Exception as e:
+        trends += f"Trend detection error: {e}\n"
 
-1. Executive Summary
-2. Representative Table
-3. Narrative Insights
-4. Closing Note
+    return trends
 
-Rules:
-- Never hard-code words from a specific file; adapt dynamically
-- Always keep the tone professional, clear, and insightful
-- Always follow the format above, even if the file is text-based or unstructured
 
-User Query:
-{user_query}
-
-Filtered Data (sample):
-{table_text}
-
-Numeric Stats:
-{numeric_stats}
-
-Domain Enrichment:
-{enrichment}
+async def professional_llm_response(user_query, file_table, headers, llm_runner, file_text="", preview_limit=30):
+    """
+    Context-managed universal response:
+    - Queries FAISS first
+    - Falls back to raw file content if FAISS returns nothing
+    - Handles chunking, stats, trends, enrichment
     """
 
-    return await llm_runner(prompt)
+    MODEL.reset_kv_cache()
+
+    # ✅ Query FAISS first
+    relevant_rows = query_index(user_query, top_k=10)
+    filtered_rows = relevant_rows if relevant_rows else (file_table or [])
+
+    # ✅ If FAISS returns nothing and no rows, fallback to raw text (chunked)
+    if not filtered_rows and file_text:
+        if isinstance(file_text, str):
+            filtered_rows = [{"RawText": chunk} for chunk in chunk_text(file_text)]
+        elif isinstance(file_text, list):
+            filtered_rows = []
+            for chunk in file_text:
+                filtered_rows.extend([{"RawText": sub_chunk} for sub_chunk in chunk_text(chunk)])
+
+    # ✅ Apply conditions if headers exist
+    conditions = detect_conditions(user_query, headers) if headers else []
+    if conditions and file_table:
+        filtered_rows = apply_conditions(file_table, conditions) or []
+
+    # ✅ Trim oversized datasets
+    MAX_TOTAL_ROWS = 2000
+    if len(filtered_rows) > MAX_TOTAL_ROWS:
+        filtered_rows = filtered_rows[:MAX_TOTAL_ROWS]
+
+    # ✅ Chunk rows
+    chunked_results = []
+    for chunk in chunk_rows(filtered_rows, 200):
+        if headers:
+            json_summary = [{h: row.get(h, "") for h in headers} for row in chunk]
+            categorical_cols, numeric_cols, date_cols = auto_detect_columns(headers, chunk)
+            numeric_stats = compute_all_numeric_stats(chunk, headers) if numeric_cols else ""
+            table_text = build_copy_table(chunk, headers, preview_limit) if chunk else ""
+            trend_summary = detect_trends(chunk, numeric_cols, date_cols)
+        else:
+            json_summary = chunk
+            numeric_stats, table_text, trend_summary = "", "", ""
+
+        chunk_prompt = f"User question: {user_query}\n\nChunk size: {len(chunk)} rows.\n\nJSON Summary:\n{json.dumps(json_summary, indent=2)}\n"
+        if numeric_stats: chunk_prompt += "\n" + numeric_stats
+        if table_text: chunk_prompt += "\nFiltered Results:\n" + table_text
+        if trend_summary: chunk_prompt += "\n" + trend_summary
+
+        chunk_answer = await llm_runner(chunk_prompt)
+        chunked_results.append(chunk_answer)
+
+    # ✅ Domain enrichment
+    enrichment = ""
+    blob = " ".join(headers).lower() + " " + user_query.lower() + " " + str(file_text).lower()
+    if any(k in blob for k in ["finance","revenue","expenses","budget"]):
+        enrichment = "Accounting Insight → Expenses rising faster than revenue."
+    elif any(k in blob for k in ["hr","employee","staff","training"]):
+        enrichment = "HR Insight → Monitor turnover and training."
+    elif "sales" in blob:
+        enrichment = "Sales Insight → Track conversion rates."
+    elif "project" in blob or "task" in blob:
+        enrichment = "Project Insight → Monitor deadlines and milestones."
+    elif "training" in blob or "course" in blob or "education" in blob:
+        enrichment = "Education Insight → Average grade trends detected."
+    elif "medical" in blob or "patient" in blob or "blood pressure" in blob:
+        enrichment = "Medical Insight → High blood pressure risk detected."
+    elif "logistics" in blob or "delivery" in blob:
+        enrichment = "Logistics Insight → Delivery times increasing, check supply chain."
+    elif "engineering" in blob or "resource" in blob:
+        enrichment = "Engineering Insight → Resource utilization efficiency detected."
+    elif "research" in blob or "publication" in blob:
+        enrichment = "Research Insight → Publication output trends identified."
+
+    final_answer = "\n\n".join(chunked_results)
+    if enrichment:
+        final_answer += "\n" + enrichment
+
+    return final_answer
+
+
 
 async def translate_text(text: str, target_lang: str) -> str:
     """
@@ -817,6 +1284,35 @@ async def detect_file_domain(texts: list, st_model) -> str:
     best_domain = max(scores, key=scores.get)
     return best_domain
 
+async def debug_file_ingestion(file_name: str, file_table: list, headers: list, file_text: str):
+    """
+    Diagnostic helper: prints ingestion status for ANY file type.
+    Shows whether structured rows (file_table) or raw text (file_text) are available.
+    """
+
+    print("\n📂 Debugging File Ingestion")
+    print(f"➡️ File: {file_name}")
+
+    if headers:
+        print(f"📝 Headers detected: {headers}")
+    else:
+        print("⚠️ No headers detected.")
+
+    if file_table:
+        print(f"✅ Structured rows loaded: {len(file_table)} rows")
+        for r in file_table[:2]:
+            print(f"   Row preview: {r}")
+    else:
+        print("⚠️ No structured rows found.")
+
+    if file_text and file_text.strip():
+        print(f"✅ Raw text extracted: {len(file_text)} characters")
+        print(f"   Text preview: {file_text[:200]}...")
+    else:
+        print("⚠️ No raw text extracted.")
+
+    print("📊 Ingestion check complete.\n")
+
 
 async def handle_user_query(
     msg_content: str,
@@ -833,34 +1329,24 @@ async def handle_user_query(
     - Drops language detection completely
     """
 
+    # ✅ Diagnostic check: print ingestion status
+    await debug_file_ingestion(file_path, file_table, headers, file_text)
+
+
     # If tabular data is available → structured response
     if file_table and headers:
         # Apply conditions
         conditions = detect_conditions(msg_content, headers)
         filtered_rows = apply_conditions(file_table, conditions) if conditions else file_table
 
-        # ✅ Use build_table instead of manual stitching
+        # Build table
         table = build_table(filtered_rows, headers, limit=20)
 
         # Numeric stats
         numeric_stats = compute_all_numeric_stats(filtered_rows, headers) if filtered_rows else ""
 
-        # Build professional response
-        response = f"""
-1. **Executive Summary**
-Query: {msg_content}
-Rows matched: {len(filtered_rows)}
-
-2. **Representative Table**
-{table}
-
-3. **Narrative Insights**
-{numeric_stats}
-
-4. **Closing Note**
-Analysis complete. Data shown above is based on actual Excel headers.
-"""
-        return response
+        # Return raw table + stats (no enforced format)
+        return f"{table}\n\n{numeric_stats}" if (table or numeric_stats) else "⚠️ No matching records found."
 
     # Fallback: semantic search
     index = cl.user_session.get("file_index")
@@ -872,15 +1358,16 @@ Analysis complete. Data shown above is based on actual Excel headers.
         D, I = index.search(np.array(query_vec), k=3)
         if len(I[0]) > 0:
             context = "\n".join([texts[i] for i in I[0]])
-            prompt = f"User question: {msg_content}\n\nRelevant context:\n{context}\n\nPlease answer clearly."
+            prompt = f"User question: {msg_content}\n\nRelevant context:\n{context}\n\nAnswer clearly."
             llm_answer = await cl.make_async(run_qwen_sync)(prompt)
-            return f"📝 **Answer:**\n\n{llm_answer}"
+            return llm_answer
 
     # Fallback: summarization
     if file_text:
         return await summarize_file_text(file_text, "English")
 
     return "⚠️ No data available to answer your query."
+
 
 async def build_faiss_index(texts):
     word_embedding_model = modules.Transformer("all-MiniLM-L6-v2")
@@ -969,95 +1456,165 @@ async def prepare_file_context(file_path: str):
 @cl.on_message
 async def on_message(msg: cl.Message):
     """
-    Balanced unified message handler:
-    - Maintains conversation state
-    - Handles uploaded files with previews (PDF, DOCX, Excel/CSV, Images)
-    - Supports multi-file and single-file queries
-    - Routes queries through professional_llm_response for polished output
+    Unified handler with context management:
+    - Maintains conversation history (dicts + HumanMessage/AIMessage objects)
+    - Handles file ingestion (Excel, CSV, DOCX, PDF, TXT, JSON, Images with OCR)
+    - Builds sidebar previews (Markdown table + numeric stats)
+    - Saves ingested content into Postgres
+    - Reloads file context safely (type‑checked JSON decode)
+    - Uses professional_llm_response with chunking for large files
     """
 
-    # Maintain conversation state
+    # ✅ Maintain conversation state (LLM objects)
     state = cl.user_session.get("state") or {"messages": []}
     cl.user_session.set("state", state)
     state["messages"].append(HumanMessage(content=msg.content))
 
-    uploaded_files = []
-    file_text = ""
-    file_path = None
+    # ✅ Maintain conversation history (dicts)
+    history = cl.user_session.get("history") or []
+    history.append({"role": "user", "content": msg.content})
+    cl.user_session.set("history", history)
+
     sidebar_elements = []
 
-    # ✅ Handle uploaded files with unified ingestion + previews
+    # ✅ File ingestion inline
     if msg.elements:
         for element in msg.elements:
             if element.type == "file":
-                file_path = element.path
-                file_name = element.name
-                uploaded_files.append(file_name)
-                try:
-                    index, texts, st_model = await prepare_file_context(file_path)
-                    file_text = "\n".join(texts)
-                    cl.user_session.set(f"{file_name}_text", file_text)
-                    cl.user_session.set(f"{file_name}_table", cl.user_session.get("file_table"))
-                    cl.user_session.set(f"{file_name}_headers", cl.user_session.get("file_headers"))
+                file_path, file_name = element.path, element.name
+                headers, rows, text_content = [], [], ""
 
-                    # ✅ Sidebar preview logic
-                    if file_path.endswith(".pdf"):
-                        sidebar_elements.append(cl.Pdf(path=file_path, name=file_name))
-                    elif file_path.endswith(".docx"):
+                try:
+                    if file_name.endswith((".xlsx", ".xls")):
+                        headers, rows = load_excel(file_path)
+                        preview = build_markdown_table(rows, headers, limit=5)
+                        sidebar_elements.append(cl.Text(content=preview, name=f"{file_name} Preview"))
+                        stats = compute_all_numeric_stats(rows, headers)
+                        sidebar_elements.append(cl.Text(content=stats, name=f"{file_name} Stats"))
+                        for chunk in chunk_rows(rows, 500):
+                            await persist_file_content(file_path)
+
+                    elif file_name.endswith(".csv"):
+                        headers, rows = load_csv(file_path)
+                        preview = build_markdown_table(rows, headers, limit=5)
+                        sidebar_elements.append(cl.Text(content=preview, name=f"{file_name} Preview"))
+                        stats = compute_all_numeric_stats(rows, headers)
+                        sidebar_elements.append(cl.Text(content=stats, name=f"{file_name} Stats"))
+                        for chunk in chunk_rows(rows, 500):
+                            await persist_file_content(file_path)
+
+                    elif file_name.endswith(".docx"):
+                        texts = load_docx(file_path)
+                        text_content = "\n".join(texts)
                         preview = "\n".join(texts[:10])
                         sidebar_elements.append(cl.Text(content=preview, name=file_name))
-                    elif file_path.endswith((".xlsx", ".csv")):
-                        headers = cl.user_session.get("file_headers", [])
-                        rows = cl.user_session.get("file_table", [])
-                        preview_rows = rows[:5]
-                        preview = ""
-                        if headers and preview_rows:
-                            table = "| " + " | ".join(headers) + " |\n"
-                            table += "| " + " | ".join(["---"] * len(headers)) + " |\n"
-                            for r in preview_rows:
-                                row_values = [str(r.get(h, "")) for h in headers]
-                                table += "| " + " | ".join(row_values) + " |\n"
-                            preview += table
-                            stats_summary = compute_all_numeric_stats(rows, headers)
-                            preview += "\n\n" + stats_summary
+                        await persist_file_content(file_name, None, None, text_content)
+
+                    elif file_name.endswith(".pdf"):
+                        texts = load_pdf(file_path)
+                        text_content = "\n".join(texts)
+                        sidebar_elements.append(cl.Pdf(path=file_path, name=file_name))
+                        await persist_file_content(file_name, None, None, text_content)
+
+                    elif file_name.endswith(".txt"):
+                        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                            text_content = f.read()
+                        sidebar_elements.append(cl.Text(content=text_content[:500], name=file_name))
+                        await persist_file_content(file_name, None, None, text_content)
+
+                    elif file_name.endswith(".json"):
+                        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                            data = json.load(f)
+                        if isinstance(data, list) and all(isinstance(item, dict) for item in data):
+                            headers = list(data[0].keys()) if data else []
+                            preview = build_markdown_table(data, headers, limit=5)
+                            sidebar_elements.append(cl.Text(content=preview, name=f"{file_name} Preview"))
+                            stats = compute_all_numeric_stats(data, headers)
+                            sidebar_elements.append(cl.Text(content=stats, name=f"{file_name} Stats"))
+                            for chunk in chunk_rows(data, 500):
+                                await persist_file_content(file_path)
+
                         else:
-                            preview = "\n".join(texts[:10])
-                        sidebar_elements.append(cl.Text(content=preview, name=file_name))
-                    elif file_path.lower().endswith((".png", ".jpg", ".jpeg")):
+                            text_content = json.dumps(data, indent=2, default=str)
+                            sidebar_elements.append(cl.Text(content=text_content[:500], name=file_name))
+                            await persist_file_content(file_name, None, None, text_content)
+
+                    elif file_name.lower().endswith((".png", ".jpg", ".jpeg")):
+                        img = PILImage.open(file_path)
+                        ocr_text = pytesseract.image_to_string(img)
+                        if ocr_text.strip():
+                            sidebar_elements.append(cl.Text(content=ocr_text[:500], name=file_name))
+                            await persist_file_content(file_name, None, None, ocr_text)
                         sidebar_elements.append(cl.Image(path=file_path, name=file_name))
+
+                    cl.user_session.set("last_file_name", file_name)
+                    cl.user_session.set(f"{file_name}_headers", headers)
+                    cl.user_session.set(f"{file_name}_table", rows)
+                    cl.user_session.set(f"{file_name}_text", text_content)
+
+                    print(f"✅ Ingested {file_name}")
+
                 except Exception as e:
                     print(f"⚠️ Error reading file {file_name}: {e}")
 
-    # ✅ Show sidebar previews if any
+    # ✅ Show sidebar previews
     if sidebar_elements:
         await cl.ElementSidebar.set_elements(sidebar_elements)
         await cl.ElementSidebar.set_title("Uploaded Files")
 
-    # ✅ Route queries through professional_llm_response
-    if len(uploaded_files) > 1:
-        # Multi-file query → still use handle_multi_file_query for merging
-        answer = await handle_multi_file_query(msg.content, uploaded_files, use_multi_fuzzy=True)
-    elif len(uploaded_files) == 1:
-        file_table = cl.user_session.get("file_table")
-        headers = cl.user_session.get("file_headers", [])
-        file_text = cl.user_session.get("file_text", "")
-        # 🔹 Always call professional_llm_response for polished narrative
-        answer = await professional_llm_response(
-            user_query=msg.content,
-            file_table=file_table,
-            headers=headers,
-            llm_runner=cl.make_async(run_qwen_sync)
+    # ✅ Collect file context from Postgres
+    data_layer = get_data_layer()
+    file_context = ""
+    headers, rows, text_content = [], [], ""
+    async with data_layer.engine.begin() as conn:
+        result = await conn.execute(
+            sql_text("SELECT file_name, headers, rows, text_content FROM file_contents WHERE thread_id = :tid"),
+            {"tid": cl.context.session.thread_id}
         )
-    else:
-        # No file → still let Qwen3 respond professionally
-        answer = await professional_llm_response(
-            user_query=msg.content,
-            file_table=[],
-            headers=[],
-            llm_runner=cl.make_async(run_qwen_sync)
-        )
+        for row in result:
+            headers = row.headers
+            rows = row.rows
+            text_content = row.text_content if row.text_content else ""
 
+            if isinstance(headers, str):
+                headers = json.loads(headers)
+            if isinstance(rows, str):
+                rows = json.loads(rows)
+
+            file_context += f"\n📂 File: {row.file_name}\n"
+            if headers: file_context += f"Headers: {headers}\n"
+            if rows: file_context += f"Rows: {rows[:2]}...\n"
+            if text_content: file_context += f"Text: {text_content[:200]}...\n"
+
+    # ✅ Pagination logic
+    preview_limit = 30
+    page = 0
+    if "next" in msg.content.lower():
+        page = cl.user_session.get("page", 0) + 1
+    elif "previous" in msg.content.lower():
+        page = max(cl.user_session.get("page", 0) - 1, 0)
+    cl.user_session.set("page", page)
+
+    # ✅ Use chunked professional_llm_response for large files
+    answer = await professional_llm_response(
+        user_query=msg.content,
+        file_table=rows,
+        headers=headers,
+        llm_runner=cl.make_async(run_qwen_sync),  # ✅ non-blocking
+        file_text=file_context,
+        preview_limit=preview_limit
+    )
+
+    # ✅ Save assistant reply into both state + history
+    state["messages"].append(AIMessage(content=answer))
+    history.append({"role": "assistant", "content": answer})
+    cl.user_session.set("state", {"messages": state["messages"]})
+    cl.user_session.set("history", history)
+
+    # ✅ Send answer back
     await cl.Message(content=answer).send()
+
+
 
 @cl.on_stop
 def on_stop():

@@ -2,7 +2,8 @@ import openpyxl
 import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer
-from sentence_transformers.sentence_transformer import modules
+
+
 
 def detect_headers(sheet, max_scan=10):
     for i, row in enumerate(sheet.iter_rows(min_row=1, max_row=max_scan, values_only=True), start=1):

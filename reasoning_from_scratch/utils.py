@@ -1,11 +1,77 @@
-# Copyright (c) Sebastian Raschka under Apache License 2.0 (see LICENSE.txt)
-# Source for "Build a Reasoning Model (From Scratch)": https://mng.bz/lZ5B
-# Code repository: https://github.com/rasbt/reasoning-from-scratch
+
 
 from pathlib import Path
 import sys
 import requests
 from urllib.parse import urlparse
+
+import os, json, datetime
+from sqlalchemy import text as sql_text
+import chainlit as cl
+
+def sanitize_row(row: dict) -> dict:
+    """Convert non-serializable values (like datetime) into strings."""
+    clean_row = {}
+    for k, v in row.items():
+        if isinstance(v, (datetime.date, datetime.datetime)):
+            clean_row[k] = v.isoformat()
+        elif v is None:
+            clean_row[k] = ""
+        else:
+            clean_row[k] = v
+    return clean_row
+
+def chunk_rows(rows, chunk_size=500):
+    """Split large tabular datasets into manageable chunks."""
+    for i in range(0, len(rows), chunk_size):
+        yield rows[i:i+chunk_size]
+
+def chunk_text(text: str, chunk_size=1000, overlap=100):
+    """Split raw text into overlapping chunks for FAISS indexing."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        chunks.append(text[start:end])
+        start += chunk_size - overlap
+    return chunks
+
+def ingest_file(file_path: str):
+    """Dispatcher to load files by extension."""
+    ext = Path(file_path).suffix.lower()
+    if ext in [".xlsx", ".xls"]:
+        from .file_ingestion import load_excel
+        return load_excel(file_path)
+    elif ext == ".csv":
+        from .file_ingestion import load_csv
+        return load_csv(file_path)
+    elif ext == ".docx":
+        from .file_ingestion import load_docx
+        return [], load_docx(file_path)
+    elif ext == ".pdf":
+        from .file_ingestion import load_pdf
+        return [], load_pdf(file_path)
+    elif ext == ".txt":
+        from .file_ingestion import load_txt
+        return [], load_txt(file_path)
+    elif ext == ".json":
+        from .file_ingestion import load_json
+        return load_json(file_path)
+    else:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+            return [], [{"RawText": f.read()}]
+
+def get_data_layer():
+    """Return SQLAlchemy data layer with LocalStorageClient."""
+    conninfo = os.getenv("DATABASE_URL")
+    if not conninfo:
+        raise ValueError("DATABASE_URL not found in environment variables.")
+    from local_storage_client import LocalStorageClient
+    from chainlit.data.sql_alchemy import SQLAlchemyDataLayer
+    return SQLAlchemyDataLayer(
+        conninfo=conninfo,
+        storage_provider=LocalStorageClient(base_dir="uploads")
+    )
 
 
 def download_file(url, out_dir=".", backup_url=None):

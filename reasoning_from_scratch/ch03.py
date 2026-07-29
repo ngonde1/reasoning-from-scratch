@@ -11,6 +11,27 @@ from sympy.core.sympify import SympifyError
 from sympy.polys.polyerrors import PolynomialError
 from tokenize import TokenError
 import torch
+# ch03.py → inside load_model_and_tokenizer
+# --- Standard library imports ---
+import os
+import torch
+
+# --- Optional bitsandbytes import ---
+try:
+    import bitsandbytes as bnb
+    HAS_BNB = True
+    print("✅ bitsandbytes available — GPU quantization enabled.")
+except ImportError:
+    HAS_BNB = False
+    bnb = None
+    print("⚠️ bitsandbytes not available — running without GPU quantization.")
+
+# --- Other third-party imports ---
+from transformers import AutoTokenizer, AutoModel
+import numpy as np
+
+# --- Local project imports ---
+
 
 from .qwen3 import (
     download_qwen3_small,
@@ -46,23 +67,28 @@ SUPERSCRIPT_MAP = {
 }
 
 
-def load_model_and_tokenizer(which_model, device, use_compile, local_dir="qwen3"):
+def load_model_and_tokenizer(which_model, device=None, use_compile=False, local_dir="qwen3"):
+    # ✅ Auto-detect device backend
+    if device is None:
+        if torch.cuda.is_available():
+            device = "cuda"
+            print("✅ CUDA GPU detected.")
+        elif torch.backends.mps.is_available():
+            device = "mps"
+            print("✅ Apple Silicon (MPS) detected.")
+        else:
+            device = "cpu"
+            print("⚠️ No GPU detected — using CPU.")
+
+    # ✅ Tokenizer + model path setup
     if which_model == "base":
-
-        download_qwen3_small(
-            kind="base", tokenizer_only=False, out_dir=local_dir
-        )
-
+        download_qwen3_small(kind="base", tokenizer_only=False, out_dir=local_dir)
         tokenizer_path = Path(local_dir) / "tokenizer-base.json"
         model_path = Path(local_dir) / "qwen3-0.6B-base.pth"
         tokenizer = Qwen3Tokenizer(tokenizer_file_path=tokenizer_path)
 
     elif which_model == "reasoning":
-
-        download_qwen3_small(
-            kind="reasoning", tokenizer_only=False, out_dir=local_dir
-        )
-
+        download_qwen3_small(kind="reasoning", tokenizer_only=False, out_dir=local_dir)
         tokenizer_path = Path(local_dir) / "tokenizer-reasoning.json"
         model_path = Path(local_dir) / "qwen3-0.6B-reasoning.pth"
         tokenizer = Qwen3Tokenizer(
@@ -71,20 +97,32 @@ def load_model_and_tokenizer(which_model, device, use_compile, local_dir="qwen3"
             add_generation_prompt=True,
             add_thinking=True,
         )
-
     else:
         raise ValueError(f"Invalid choice: which_model={which_model}")
 
+    # ✅ Load model
     model = Qwen3Model(QWEN_CONFIG_06_B)
-    model.load_state_dict(torch.load(model_path))
-
+    model.load_state_dict(torch.load(model_path, map_location=device))
     model.to(device)
 
+    # ✅ Conditional quantization
+    try:
+        import bitsandbytes as bnb
+        if device == "cuda":
+            print("✅ bitsandbytes + CUDA detected — enabling 8‑bit quantization.")
+            model = bnb.nn.Linear8bitLt.convert_linear_layers(model)
+        else:
+            print("⚠️ Quantization skipped (not CUDA).")
+    except ImportError:
+        print("⚠️ bitsandbytes not installed — running in full precision.")
+
+    # ✅ Optional compilation
     if use_compile:
         torch._dynamo.config.allow_unspec_int_on_nn_module = True
         model = torch.compile(model)
 
-    return model, tokenizer
+    return model, tokenizer, device
+
 
 
 def load_tokenizer_only(which_model, local_dir="qwen3"):

@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS steps (
     "language" TEXT,
     "indent" INT,
     "defaultOpen" BOOLEAN,
+    "modes" JSONB,
     FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
 );
 
@@ -66,4 +67,16 @@ CREATE TABLE IF NOT EXISTS feedbacks (
     "value" INT NOT NULL,
     "comment" TEXT,
     FOREIGN KEY ("threadId") REFERENCES threads("id") ON DELETE CASCADE
+);
+
+-- ✅ Add file_contents table here
+CREATE TABLE IF NOT EXISTS file_contents (
+    id SERIAL PRIMARY KEY,
+    thread_id UUID NOT NULL,
+    file_name TEXT NOT NULL,
+    headers JSONB,
+    rows JSONB,
+    text_content TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    FOREIGN KEY (thread_id) REFERENCES threads("id") ON DELETE CASCADE
 );
